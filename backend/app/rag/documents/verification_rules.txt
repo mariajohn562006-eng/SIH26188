@@ -1,0 +1,42 @@
+ByteMind Document Verification Rules
+
+Document verification combines multiple analysis signals.
+
+The verification process may include:
+- OCR text extraction
+- MRZ detection
+- MRZ parsing
+- Document image analysis
+- Face detection
+- Live photo analysis
+- Document integrity analysis
+- Consistency checks
+
+OCR is used to extract visible text from the document.
+
+OCR failure means that text could not be reliably extracted from the document image.
+
+Face detection determines whether a usable face is present in an image.
+
+A document face should be reviewed when the document contains a portrait photograph.
+
+A live photo should normally contain a detectable face when biometric review is required.
+
+Multiple detected faces may require additional review because the system cannot automatically determine which detected face is the intended subject.
+
+Document integrity analysis can identify signals associated with possible image manipulation.
+
+Possible image manipulation is a verification warning and should be reviewed together with other verification signals.
+
+Verification findings should be reported with their supporting evidence.
+
+Automated analysis should not claim certainty when the available image quality or extracted information is insufficient.
+
+A verification result should distinguish between:
+- Successful automated checks
+- Failed checks
+- Missing information
+- Warnings
+- Findings requiring manual review
+
+Individual automated checks should not be interpreted as conclusive proof of document authenticity by themselves.

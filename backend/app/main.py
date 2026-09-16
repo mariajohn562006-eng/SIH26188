@@ -1,33 +1,56 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import uuid
+from uuid import uuid4
 
-from app.verification import analyze_verification
-from app.ocr import analyze_document
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.face_match import analyze_face_inputs
-from app.tamper_detection import analyze_tampering
+from app.ocr import analyze_document
 from app.risk_engine import calculate_risk_score
 from app.result_aggregator import aggregate_results
-
+from app.tamper_detection import analyze_tampering
 from app.validation import (
     validate_document,
-    validate_photo,
     validate_image_file,
-    format_error,
+    validate_photo,
 )
 
+# =========================================================
+# OPTIONAL RAG
+# =========================================================
+
+try:
+    from app.rag.rag_engine import analyze_with_rag
+
+    RAG_AVAILABLE = True
+
+except Exception as error:
+    print(
+        f"WARNING: RAG module unavailable: {error}"
+    )
+
+    analyze_with_rag = None
+    RAG_AVAILABLE = False
+
+
+# =========================================================
+# APP CONFIGURATION
+# =========================================================
 
 app = FastAPI(
-    title="ByteMind API",
-    description="AI-Based Fake Identity and Document Screening System",
+    title="ByteMind Verification API",
+    description=(
+        "Document verification backend for OCR, MRZ, "
+        "face matching, tamper detection, risk analysis, "
+        "and RAG-based verification explanations."
+    ),
     version="1.0.0",
 )
 
 
-# --------------------------------------------------
+# =========================================================
 # CORS
-# --------------------------------------------------
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +58,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
+        "http://localhost:5176",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -42,462 +66,430 @@ app.add_middleware(
 )
 
 
-# --------------------------------------------------
+# =========================================================
 # UPLOAD DIRECTORY
-# --------------------------------------------------
+# =========================================================
 
 UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+
+UPLOAD_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 
-# --------------------------------------------------
-# HOME
-# --------------------------------------------------
+# =========================================================
+# BASIC ROUTES
+# =========================================================
 
 @app.get("/")
-def home():
+def root():
     return {
+        "message": "ByteMind Verification API",
         "system": "ByteMind",
         "status": "Backend is running",
-        "version": "1.0.0",
+        "apiStatus": "running",
+        "legacyStatus": "Backend is running",
     }
 
-
-# --------------------------------------------------
-# HEALTH CHECK
-# --------------------------------------------------
 
 @app.get("/health")
 def health():
     return {
         "status": "healthy",
         "service": "ByteMind Backend",
+        "apiService": "ByteMind Verification API",
+        "ragAvailable": RAG_AVAILABLE,
     }
 
 
-# --------------------------------------------------
+# =========================================================
 # START VERIFICATION
-# --------------------------------------------------
+# =========================================================
 
 @app.post("/api/verification/start")
 async def start_verification(
     document: UploadFile = File(...),
-    photo: UploadFile = File(...),
+    live_photo: UploadFile | None = File(default=None),
+    photo: UploadFile | None = File(default=None),
+    user_id: str | None = Form(default=None),
 ):
     """
-    Complete ByteMind verification pipeline:
+    Run the complete document verification pipeline.
 
-    1. Validate uploaded files
-    2. Save files
-    3. OCR + MRZ analysis
-    4. Face analysis
-    5. Tamper analysis
-    6. Verification analysis
-    7. Risk calculation
-    8. Final result aggregation
+    Pipeline:
+
+        1. Validate uploads
+        2. Save files
+        3. OCR
+        4. MRZ detection/parsing
+        5. Face analysis
+        6. Tamper detection
+        7. Verification analysis
+        8. Risk analysis
+        9. RAG explanation
+        10. Final result aggregation
     """
 
-    # --------------------------------------------------
-    # CREATE VERIFICATION ID
-    # --------------------------------------------------
+    # =====================================================
+    # VALIDATION
+    # =====================================================
 
-    verification_id = f"BM-{uuid.uuid4().hex[:8].upper()}"
+    uploaded_photo = live_photo or photo
 
-    print("=" * 60)
-    print("DEBUG: verification started:", verification_id)
-    print("=" * 60)
-
-
-    # --------------------------------------------------
-    # READ DOCUMENT
-    # --------------------------------------------------
-
-    print("DEBUG: reading document")
-
-    try:
-        document_content = await document.read()
-    except Exception as error:
-        print("DEBUG: document read failed:", error)
-
+    if uploaded_photo is None:
         raise HTTPException(
-            status_code=400,
-            detail=format_error(
-                "Document upload",
-                error
-            )
+            status_code=422,
+            detail="Live photo is required. Use 'live_photo' or 'photo'.",
         )
 
 
-    # --------------------------------------------------
-    # READ PHOTO
-    # --------------------------------------------------
+    # =====================================================
+    # CREATE UNIQUE FILE NAMES
+    # =====================================================
 
-    print("DEBUG: reading photo")
+    verification_id = str(uuid4())
 
-    try:
-        photo_content = await photo.read()
-    except Exception as error:
-        print("DEBUG: photo read failed:", error)
-
-        raise HTTPException(
-            status_code=400,
-            detail=format_error(
-                "Photo upload",
-                error
-            )
-        )
-
-
-    # --------------------------------------------------
-    # VALIDATE UPLOADS
-    # --------------------------------------------------
-
-    print("DEBUG: validating document")
-
-    validate_document(
-        document,
-        document_content
-    )
-
-    print("DEBUG: validating photo")
-
-    validate_photo(
-        photo,
-        photo_content
-    )
-
-
-    # --------------------------------------------------
-    # FILE EXTENSIONS
-    # --------------------------------------------------
-
-    document_extension = Path(
-        document.filename
+    document_suffix = Path(
+        document.filename or ""
     ).suffix.lower()
 
-    photo_extension = Path(
-        photo.filename
+    photo_suffix = Path(
+        uploaded_photo.filename or ""
     ).suffix.lower()
-
-
-    # --------------------------------------------------
-    # CREATE FILE PATHS
-    # --------------------------------------------------
 
     document_path = (
         UPLOAD_DIR
-        / f"{verification_id}_document{document_extension}"
+        / f"{verification_id}_document{document_suffix}"
     )
 
     photo_path = (
         UPLOAD_DIR
-        / f"{verification_id}_photo{photo_extension}"
+        / f"{verification_id}_photo{photo_suffix}"
     )
 
 
-    # --------------------------------------------------
+    # =====================================================
     # SAVE DOCUMENT
-    # --------------------------------------------------
-
-    print("DEBUG: saving document")
+    # =====================================================
 
     try:
-        document_path.write_bytes(
-            document_content
+
+        document_content = await document.read()
+        photo_content = await uploaded_photo.read()
+
+        validate_document(
+            document,
+            document_content,
         )
+
+        validate_photo(
+            uploaded_photo,
+            photo_content,
+        )
+
+        with open(
+            document_path,
+            "wb",
+        ) as file:
+
+            file.write(
+                document_content
+            )
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Document upload failed: "
+                f"{error}"
+            ),
+        )
+
+
+    # =====================================================
+    # SAVE LIVE PHOTO
+    # =====================================================
+
+    try:
+
+        with open(
+            photo_path,
+            "wb",
+        ) as file:
+
+            file.write(
+                photo_content
+            )
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Live photo upload failed: "
+                f"{error}"
+            ),
+        )
+
+
+    # =====================================================
+    # VERIFY SAVED FILES
+    # =====================================================
+
+    try:
 
         validate_image_file(
             document_path
         )
 
-    except HTTPException:
-        raise
-
-    except Exception as error:
-        print("DEBUG: document save failed:", error)
-
-        raise HTTPException(
-            status_code=500,
-            detail=format_error(
-                "Document storage",
-                error
-            )
-        )
-
-    print(
-        "DEBUG: document saved:",
-        document_path
-    )
-
-    print(
-        "DEBUG: document size:",
-        len(document_content),
-        "bytes"
-    )
-
-    print(
-        "DEBUG: document extension:",
-        document_extension
-    )
-
-
-    # --------------------------------------------------
-    # SAVE PHOTO
-    # --------------------------------------------------
-
-    print("DEBUG: saving photo")
-
-    try:
-        photo_path.write_bytes(
-            photo_content
-        )
-
         validate_image_file(
             photo_path
         )
 
-    except HTTPException:
-        raise
-
     except Exception as error:
-        print("DEBUG: photo save failed:", error)
 
         raise HTTPException(
-            status_code=500,
-            detail=format_error(
-                "Photo storage",
-                error
-            )
+            status_code=400,
+            detail=(
+                f"Saved file validation failed: "
+                f"{error}"
+            ),
         )
 
-    print(
-        "DEBUG: photo saved:",
-        photo_path
-    )
 
-
-    # --------------------------------------------------
-    # OCR + MRZ ANALYSIS
-    # --------------------------------------------------
-
-    print("DEBUG: starting OCR")
+    # =====================================================
+    # OCR + MRZ + DOCUMENT TYPE
+    # =====================================================
 
     try:
+
         document_analysis = analyze_document(
-            str(document_path)
+            document_path
         )
 
-        print("DEBUG: OCR finished")
-
     except Exception as error:
-        print("DEBUG: OCR failed:", error)
 
         raise HTTPException(
             status_code=500,
-            detail=format_error(
-                "OCR analysis",
-                error
-            )
+            detail=(
+                f"OCR analysis failed: "
+                f"{error}"
+            ),
         )
 
 
-    # --------------------------------------------------
+    # =====================================================
     # FACE ANALYSIS
-    # --------------------------------------------------
-
-    print("DEBUG: starting face analysis")
+    # =====================================================
 
     try:
+
         face_analysis = analyze_face_inputs(
-            str(document_path),
-            str(photo_path)
+            document_path=str(
+                document_path
+            ),
+            photo_path=str(
+                photo_path
+            ),
         )
 
-        print("DEBUG: face analysis finished")
-
     except Exception as error:
-        print("DEBUG: face analysis failed:", error)
 
         raise HTTPException(
             status_code=500,
-            detail=format_error(
-                "Face analysis",
-                error
-            )
+            detail=(
+                f"Face analysis failed: "
+                f"{error}"
+            ),
         )
 
 
-    # --------------------------------------------------
-    # TAMPER ANALYSIS
-    # --------------------------------------------------
-
-    print("DEBUG: starting tamper analysis")
+    # =====================================================
+    # TAMPER DETECTION
+    # =====================================================
 
     try:
+
         tamper_analysis = analyze_tampering(
-            str(document_path)
+            document_path
         )
 
-        print("DEBUG: tamper analysis finished")
-
     except Exception as error:
-        print("DEBUG: tamper analysis failed:", error)
 
         raise HTTPException(
             status_code=500,
-            detail=format_error(
-                "Tamper analysis",
-                error
-            )
+            detail=(
+                f"Tamper detection failed: "
+                f"{error}"
+            ),
         )
 
 
-    # --------------------------------------------------
-    # VERIFICATION ANALYSIS
-    # --------------------------------------------------
-
-    print("DEBUG: starting verification analysis")
+    # =====================================================
+    # BASE VERIFICATION
+    # =====================================================
 
     try:
-        # analyze_verification expects Path objects
-        verification_analysis = analyze_verification(
-            document_path,
-            photo_path
+
+        from app.verification import (
+            analyze_verification
         )
 
-        print(
-            "DEBUG: verification analysis finished"
-        )
-
-    except Exception as error:
-        print(
-            "DEBUG: verification analysis failed:",
-            error
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=format_error(
-                "Verification analysis",
-                error
+        verification_analysis = (
+            analyze_verification(
+                document_path,
+                photo_path,
             )
         )
 
+    except Exception as error:
 
-    # --------------------------------------------------
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Verification analysis failed: "
+                f"{error}"
+            ),
+        )
+
+
+    # =====================================================
     # RISK ENGINE
-    # --------------------------------------------------
-
-    print("DEBUG: starting risk analysis")
+    # =====================================================
 
     try:
+
         risk_analysis = calculate_risk_score(
             ocr_analysis=document_analysis,
-            face_analysis=face_analysis.get(
-                "faceAnalysis",
-                face_analysis
-            ),
+            face_analysis=face_analysis,
             tamper_analysis=tamper_analysis,
-            verification_analysis=verification_analysis,
+            verification_analysis=(
+                verification_analysis
+            ),
         )
 
-        print("DEBUG: risk analysis finished")
-
     except Exception as error:
-        print("DEBUG: risk analysis failed:", error)
 
         raise HTTPException(
             status_code=500,
-            detail=format_error(
-                "Risk analysis",
-                error
-            )
+            detail=(
+                f"Risk analysis failed: "
+                f"{error}"
+            ),
         )
 
 
-    # --------------------------------------------------
-    # FINAL RESULT AGGREGATION
-    # --------------------------------------------------
+    # =====================================================
+    # RAG ANALYSIS
+    # =====================================================
 
-    print("DEBUG: aggregating final result")
+    if RAG_AVAILABLE and analyze_with_rag:
+
+        try:
+
+            rag_analysis = analyze_with_rag(
+                ocr_analysis=document_analysis,
+                face_analysis=face_analysis.get(
+                    "faceAnalysis",
+                    face_analysis,
+                ),
+                tamper_analysis=tamper_analysis,
+                verification_analysis=(
+                    verification_analysis
+                ),
+                top_k=3,
+            )
+
+        except Exception as error:
+
+            print(
+                f"WARNING: RAG analysis failed: "
+                f"{error}"
+            )
+
+            rag_analysis = {
+                "enabled": False,
+                "query": "",
+                "resultCount": 0,
+                "sources": [],
+                "retrievedKnowledge": [],
+                "context": "",
+                "explanation": (
+                    "RAG analysis was unavailable."
+                ),
+            }
+
+    else:
+
+        rag_analysis = {
+            "enabled": False,
+            "query": "",
+            "resultCount": 0,
+            "sources": [],
+            "retrievedKnowledge": [],
+            "context": "",
+            "explanation": (
+                "RAG is not available."
+            ),
+        }
+
+
+    # =====================================================
+    # FINAL RESULT AGGREGATION
+    # =====================================================
 
     try:
+
         final_result = aggregate_results(
-            verification_id=verification_id,
             ocr_analysis=document_analysis,
-            face_analysis=face_analysis.get(
-                "faceAnalysis",
-                face_analysis
-            ),
+            face_analysis=face_analysis,
             tamper_analysis=tamper_analysis,
-            verification_analysis=verification_analysis,
+            verification_analysis=(
+                verification_analysis
+            ),
             risk_analysis=risk_analysis,
         )
 
-        print(
-            "DEBUG: final result aggregation finished"
-        )
-
     except Exception as error:
-        print(
-            "DEBUG: result aggregation failed:",
-            error
-        )
 
         raise HTTPException(
             status_code=500,
-            detail=format_error(
-                "Result aggregation",
-                error
-            )
+            detail=(
+                f"Result aggregation failed: "
+                f"{error}"
+            ),
         )
 
 
-    # --------------------------------------------------
+    # =====================================================
     # FINAL RESPONSE
-    # --------------------------------------------------
-
-    print(
-        "DEBUG: verification completed:",
-        verification_id
-    )
-
-    print(
-        "DEBUG: risk score:",
-        risk_analysis.get("riskScore")
-    )
-
-    print(
-        "DEBUG: risk level:",
-        risk_analysis.get("riskLevel")
-    )
-
-    print("=" * 60)
-
+    # =====================================================
 
     return {
-        "verification_id": verification_id,
+        "success": True,
 
-        "status": "completed",
+        "verificationId": verification_id,
 
-        "message": (
-            "Document and live photo received "
-            "and analyzed successfully."
+        "userId": user_id,
+
+        "finalResult": final_result.get(
+            "finalResult",
+            {},
         ),
 
-        "document": document.filename,
-
-        "photo": photo.filename,
-
-        "ocr": document_analysis,
+        "documentAnalysis": document_analysis,
 
         "faceAnalysis": face_analysis,
 
         "tamperAnalysis": tamper_analysis,
 
-        "analysis": verification_analysis,
+        "verificationAnalysis": (
+            verification_analysis
+        ),
 
-        "risk": risk_analysis,
+        "riskAnalysis": risk_analysis,
 
-        "finalResult": final_result,
+        "rag": rag_analysis,
     }

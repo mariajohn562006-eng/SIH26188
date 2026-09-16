@@ -905,20 +905,30 @@ function MiniStat({
 }
 
 function toWorkspaceResult(response) {
-  const ocr = response.ocr?.ocr ?? {}
-  const mrz = response.ocr?.mrz ?? {}
+  const documentAnalysis = response.documentAnalysis ?? response.ocr ?? {}
+  const ocr = documentAnalysis.ocr ?? {}
+  const mrz = documentAnalysis.mrz ?? {}
   const face = response.faceAnalysis?.faceAnalysis ?? response.faceAnalysis ?? {}
-  const tamper = response.tamperAnalysis?.tamperAnalysis ?? {}
-  const risk = response.risk ?? {}
+  const tamper = response.tamperAnalysis?.tamperAnalysis
+    ?? response.tamperAnalysis
+    ?? {}
+  const risk = response.riskAnalysis ?? response.risk ?? {}
   const finalResult = response.finalResult ?? {}
   const riskScore = Number(risk.riskScore ?? finalResult.risk?.score ?? 0)
   const faceUsable = Boolean(face.documentFaceUsable && face.livePhotoFaceUsable)
-  const mrzValid = Boolean(mrz.detected && mrz.parsed?.success)
+  const mrzValid = Boolean(
+    mrz.detected
+    && (
+      mrz.parsed?.success
+      || mrz.lines?.length >= 2
+      || mrz.status === 'verified'
+    )
+  )
   const tamperScore = Math.min(100, Number(tamper.warningCount ?? 0) * 25)
   const status = finalResult.status ?? response.status
 
   return {
-    id: response.verification_id,
+    id: response.verification_id ?? response.verificationId,
     decision: status === 'rejected'
       ? 'rejected'
       : status === 'manual_review'

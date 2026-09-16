@@ -1,17 +1,28 @@
 from typing import Any
 
 
+# =========================================================
+# CLAMP RISK SCORE
+# =========================================================
+
 def clamp_score(score: float) -> float:
     """
-    Keep a score between 0 and 100.
+    Keep the risk score between 0 and 100.
     """
-    return max(0.0, min(100.0, float(score)))
+
+    return max(
+        0.0,
+        min(100.0, float(score))
+    )
 
 
-def calculate_risk_level(risk_score: float) -> str:
-    """
-    Convert numerical risk score into a readable risk level.
-    """
+# =========================================================
+# CALCULATE RISK LEVEL
+# =========================================================
+
+def calculate_risk_level(
+    risk_score: float
+) -> str:
 
     if risk_score < 30:
         return "low"
@@ -25,20 +36,16 @@ def calculate_risk_level(risk_score: float) -> str:
     return "critical"
 
 
+# =========================================================
+# CALCULATE OVERALL RISK SCORE
+# =========================================================
+
 def calculate_risk_score(
     ocr_analysis: dict[str, Any] | None = None,
     face_analysis: dict[str, Any] | None = None,
     tamper_analysis: dict[str, Any] | None = None,
     verification_analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Calculate an overall risk score using the results
-    produced by the different verification modules.
-
-    Score:
-        0   = lowest detected risk
-        100 = highest detected risk
-    """
 
     ocr_analysis = ocr_analysis or {}
     face_analysis = face_analysis or {}
@@ -48,55 +55,114 @@ def calculate_risk_score(
     risk_score = 0.0
     risk_factors = []
 
-    # --------------------------------------------------
-    # 1. OCR / DOCUMENT TEXT
-    # --------------------------------------------------
+    # =====================================================
+    # OCR RISK
+    # =====================================================
 
-    ocr_success = ocr_analysis.get("ocr", {}).get("success", False)
+    ocr_data = ocr_analysis.get(
+        "ocr",
+        {}
+    )
+
+    ocr_success = ocr_data.get(
+        "success",
+        False
+    )
 
     if not ocr_success:
+
         risk_score += 20
 
         risk_factors.append({
             "factor": "OCR failure",
             "impact": 20,
-            "reason": "Document text could not be reliably extracted."
+            "reason": (
+                "Document text could not be "
+                "reliably extracted."
+            )
         })
 
-    # --------------------------------------------------
-    # 2. MRZ
-    # --------------------------------------------------
+    # =====================================================
+    # MRZ RISK
+    # =====================================================
 
-    mrz_data = ocr_analysis.get("mrz", {})
+    mrz_data = ocr_analysis.get(
+        "mrz",
+        {}
+    )
 
-    mrz_detected = mrz_data.get("detected", False)
+    mrz_required = mrz_data.get(
+        "required",
+        True
+    )
 
-    if not mrz_detected:
-        risk_score += 20
+    mrz_detected = mrz_data.get(
+        "detected",
+        False
+    )
 
-        risk_factors.append({
-            "factor": "MRZ not detected",
-            "impact": 20,
-            "reason": "Machine-readable zone was not detected."
-        })
-    else:
-        parsed_mrz = mrz_data.get("parsed", {})
+    mrz_status = str(
+        mrz_data.get(
+            "status",
+            ""
+        )
+    ).lower()
 
-        if isinstance(parsed_mrz, dict):
-            mrz_success = parsed_mrz.get("success", False)
+    if mrz_required:
 
-            if not mrz_success:
-                risk_score += 10
+        if not mrz_detected:
 
-                risk_factors.append({
-                    "factor": "MRZ parsing failure",
-                    "impact": 10,
-                    "reason": "MRZ was detected but could not be parsed successfully."
-                })
+            risk_score += 20
 
-    # --------------------------------------------------
-    # 3. FACE ANALYSIS
-    # --------------------------------------------------
+            risk_factors.append({
+                "factor": "MRZ not detected",
+                "impact": 20,
+                "reason": (
+                    "MRZ was required for this "
+                    "document but was not detected."
+                )
+            })
+
+        else:
+
+            parsed_mrz = mrz_data.get(
+                "parsed",
+                {}
+            )
+
+            if isinstance(
+                parsed_mrz,
+                dict
+            ):
+
+                mrz_success = parsed_mrz.get(
+                    "success",
+                    False
+                )
+
+                if not mrz_success:
+
+                    risk_score += 10
+
+                    risk_factors.append({
+                        "factor": "MRZ parsing failure",
+                        "impact": 10,
+                        "reason": (
+                            "MRZ was detected but "
+                            "could not be parsed successfully."
+                        )
+                    })
+
+    elif mrz_status == "not required":
+
+        print(
+            "DEBUG: MRZ not required - "
+            "no MRZ risk added"
+        )
+
+    # =====================================================
+    # FACE ANALYSIS
+    # =====================================================
 
     document_face_usable = face_analysis.get(
         "documentFaceUsable",
@@ -108,100 +174,253 @@ def calculate_risk_score(
         False
     )
 
-    if not document_face_usable:
-        risk_score += 15
+    document_face_data = face_analysis.get(
+        "document",
+        {}
+    )
 
-        risk_factors.append({
-            "factor": "Document face unavailable",
-            "impact": 15,
-            "reason": "A usable face was not detected in the document."
-        })
+    live_photo_data = face_analysis.get(
+        "livePhoto",
+        {}
+    )
+
+    face_match = face_analysis.get(
+        "faceMatch",
+        {}
+    )
+
+    face_risk = False
+    face_reasons = []
+
+    # -----------------------------------------------------
+    # Document face unavailable
+    # -----------------------------------------------------
+
+    if not document_face_usable:
+
+        face_risk = True
+
+        face_reasons.append(
+            "A usable face was not detected "
+            "in the document."
+        )
+
+    # -----------------------------------------------------
+    # Live photo face unavailable
+    # -----------------------------------------------------
 
     if not live_photo_face_usable:
-        risk_score += 15
+
+        face_risk = True
+
+        face_reasons.append(
+            "A usable face was not detected "
+            "in the live photo."
+        )
+
+    # -----------------------------------------------------
+    # Multiple document faces
+    # -----------------------------------------------------
+
+    if isinstance(
+        document_face_data,
+        dict
+    ):
+
+        if document_face_data.get(
+            "status"
+        ) == "multiple_faces":
+
+            face_risk = True
+
+            face_reasons.append(
+                "Multiple faces were detected "
+                "in the document."
+            )
+
+    # -----------------------------------------------------
+    # Multiple live-photo faces
+    # -----------------------------------------------------
+
+    if isinstance(
+        live_photo_data,
+        dict
+    ):
+
+        if live_photo_data.get(
+            "status"
+        ) == "multiple_faces":
+
+            face_risk = True
+
+            face_reasons.append(
+                "Multiple faces were detected "
+                "in the live photo."
+            )
+
+    # -----------------------------------------------------
+    # Actual face mismatch
+    # -----------------------------------------------------
+
+    if isinstance(
+        face_match,
+        dict
+    ):
+
+        match_status = str(
+            face_match.get(
+                "status",
+                ""
+            )
+        ).lower()
+
+        match_value = face_match.get(
+            "match"
+        )
+
+        # Only treat an explicit no_match result
+        # as a face verification risk.
+        #
+        # "not_comparable" and
+        # "insufficient_features" are handled
+        # as unavailable comparison evidence,
+        # not as proof of a mismatch.
+
+        if (
+            match_status == "no_match"
+            or match_value is False
+        ):
+
+            face_risk = True
+
+            face_reasons.append(
+                "The document portrait and "
+                "live photo did not show "
+                "sufficient visual similarity."
+            )
+
+    # -----------------------------------------------------
+    # Apply face risk
+    # -----------------------------------------------------
+
+    if face_risk:
+
+        risk_score += 30
 
         risk_factors.append({
-            "factor": "Live photo face unavailable",
-            "impact": 15,
-            "reason": "A usable face was not detected in the live photo."
+            "factor": "Face verification issue",
+            "impact": 30,
+            "reason": " ".join(face_reasons)
         })
 
-    # --------------------------------------------------
-    # 4. MULTIPLE FACES
-    # --------------------------------------------------
-
-    document_face_data = face_analysis.get("document", {})
-    live_photo_data = face_analysis.get("livePhoto", {})
-
-    if document_face_data.get("status") == "multiple_faces":
-        risk_score += 10
-
-        risk_factors.append({
-            "factor": "Multiple document faces",
-            "impact": 10,
-            "reason": "More than one face was detected in the document image."
-        })
-
-    if live_photo_data.get("status") == "multiple_faces":
-        risk_score += 10
-
-        risk_factors.append({
-            "factor": "Multiple live-photo faces",
-            "impact": 10,
-            "reason": "More than one face was detected in the live photo."
-        })
-
-    # --------------------------------------------------
-    # 5. TAMPER ANALYSIS
-    # --------------------------------------------------
+    # =====================================================
+    # TAMPER RISK
+    # =====================================================
 
     tamper_detected = False
 
-    if isinstance(tamper_analysis, dict):
+    if isinstance(
+        tamper_analysis,
+        dict
+    ):
 
-        # Support several possible field names so the
-        # risk engine remains compatible with tamper_detection.py.
         tamper_detected = bool(
-            tamper_analysis.get("tampered", False)
-            or tamper_analysis.get("tamperDetected", False)
-            or tamper_analysis.get("isTampered", False)
+            tamper_analysis.get(
+                "tampered",
+                False
+            )
+            or tamper_analysis.get(
+                "tamperingDetected",
+                False
+            )
+            or tamper_analysis.get(
+                "tamperDetected",
+                False
+            )
+            or tamper_analysis.get(
+                "isTampered",
+                False
+            )
         )
 
-        tamper_result = tamper_analysis.get("tamperAnalysis")
+        nested_tamper = tamper_analysis.get(
+            "tamperAnalysis"
+        )
 
-        if isinstance(tamper_result, dict):
-            tamper_detected = tamper_detected or bool(
-                tamper_result.get("tampered", False)
-                or tamper_result.get("tamperDetected", False)
-                or tamper_result.get("isTampered", False)
+        if isinstance(
+            nested_tamper,
+            dict
+        ):
+
+            tamper_detected = (
+                tamper_detected
+                or bool(
+                    nested_tamper.get(
+                        "tampered",
+                        False
+                    )
+                    or nested_tamper.get(
+                        "tamperingDetected",
+                        False
+                    )
+                    or nested_tamper.get(
+                        "tamperDetected",
+                        False
+                    )
+                    or nested_tamper.get(
+                        "isTampered",
+                        False
+                    )
+                )
             )
 
     if tamper_detected:
+
         risk_score += 30
 
         risk_factors.append({
             "factor": "Possible document tampering",
             "impact": 30,
-            "reason": "Document integrity analysis reported possible manipulation."
+            "reason": (
+                "Document integrity analysis "
+                "reported possible manipulation."
+            )
         })
 
-    # --------------------------------------------------
-    # 6. VERIFICATION ANALYSIS
-    # --------------------------------------------------
+    # =====================================================
+    # VERIFICATION RISK
+    # =====================================================
 
     verification_status = ""
 
-    if isinstance(verification_analysis, dict):
+    if isinstance(
+        verification_analysis,
+        dict
+    ):
 
         verification_status = str(
-            verification_analysis.get("status", "")
+            verification_analysis.get(
+                "status",
+                ""
+            )
         ).lower()
 
-        nested_analysis = verification_analysis.get("analysis")
+        nested_analysis = (
+            verification_analysis.get(
+                "analysis"
+            )
+        )
 
-        if isinstance(nested_analysis, dict):
+        if isinstance(
+            nested_analysis,
+            dict
+        ):
+
             verification_status = str(
-                nested_analysis.get("status", verification_status)
+                nested_analysis.get(
+                    "status",
+                    verification_status
+                )
             ).lower()
 
     if verification_status in {
@@ -210,45 +429,73 @@ def calculate_risk_score(
         "invalid",
         "suspicious"
     }:
+
         risk_score += 25
 
         risk_factors.append({
             "factor": "Verification warning",
             "impact": 25,
-            "reason": f"Verification analysis returned status: {verification_status}."
+            "reason": (
+                "Verification analysis returned "
+                f"status: {verification_status}."
+            )
         })
 
-    # --------------------------------------------------
+    # =====================================================
     # FINAL SCORE
-    # --------------------------------------------------
+    # =====================================================
 
-    risk_score = clamp_score(risk_score)
+    risk_score = clamp_score(
+        risk_score
+    )
 
-    risk_level = calculate_risk_level(risk_score)
+    risk_level = calculate_risk_level(
+        risk_score
+    )
 
-    # --------------------------------------------------
+    # =====================================================
     # RECOMMENDATION
-    # --------------------------------------------------
+    # =====================================================
 
     if risk_level == "low":
-        recommendation = "Proceed with normal verification review."
+
+        recommendation = (
+            "Proceed with normal verification review."
+        )
 
     elif risk_level == "medium":
-        recommendation = "Perform additional verification checks."
+
+        recommendation = (
+            "Perform additional verification checks."
+        )
 
     elif risk_level == "high":
-        recommendation = "Require manual review before approval."
+
+        recommendation = (
+            "Require manual review before approval."
+        )
 
     else:
-        recommendation = "Hold verification for detailed manual investigation."
+
+        recommendation = (
+            "Hold verification for detailed "
+            "manual investigation."
+        )
+
+    # =====================================================
+    # FINAL RESULT
+    # =====================================================
 
     return {
-        "riskScore": round(risk_score, 2),
+
+        "riskScore": round(
+            risk_score,
+            2
+        ),
+
         "riskLevel": risk_level,
+
         "riskFactors": risk_factors,
+
         "recommendation": recommendation
     }
-
-
-# Backward-compatible export used by the app entrypoint.
-calculate_risk = calculate_risk_score

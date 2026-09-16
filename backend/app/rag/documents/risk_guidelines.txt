@@ -1,0 +1,39 @@
+ByteMind Risk Review Guidelines
+
+Risk scoring combines signals from multiple verification modules.
+
+Potential risk factors may include:
+- OCR failure
+- MRZ not detected
+- MRZ parsing failure
+- Document face unavailable
+- Live photo face unavailable
+- Multiple faces detected
+- Possible document tampering
+- Verification warnings
+
+A higher risk score indicates that more verification concerns were detected by the configured rules.
+
+Risk levels used by ByteMind are:
+- Low
+- Medium
+- High
+- Critical
+
+Low risk indicates that relatively few configured risk signals were detected.
+
+Medium risk indicates that additional verification checks may be appropriate.
+
+High risk indicates that manual review may be appropriate before approval.
+
+Critical risk indicates that detailed manual investigation may be appropriate.
+
+Risk scoring is a screening mechanism and does not by itself establish whether an identity document is genuine or fraudulent.
+
+Risk factors should be displayed together with their impact and reason.
+
+The risk engine should remain deterministic and separate from the RAG knowledge retrieval system.
+
+RAG should provide supporting knowledge and explanations for detected findings rather than changing the numerical risk score.
+
+When evidence is incomplete, the system should communicate the limitation rather than inventing missing information.

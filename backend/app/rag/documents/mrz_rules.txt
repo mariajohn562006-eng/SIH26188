@@ -1,0 +1,35 @@
+ByteMind MRZ Verification Rules
+
+MRZ stands for Machine Readable Zone.
+
+Passport MRZ information is normally encoded using two lines of machine-readable characters for a standard TD3 passport.
+
+The MRZ contains information such as:
+- Document type
+- Issuing country
+- Surname and given names
+- Passport number
+- Nationality
+- Date of birth
+- Sex
+- Passport expiration date
+- Personal number when applicable
+- Check digits
+
+MRZ validation should examine:
+- Whether an MRZ region was detected
+- Whether the expected number of MRZ lines is present
+- Whether the line structure is valid
+- Whether fields can be parsed
+- Whether required check digits are valid
+- Whether dates can be interpreted correctly
+
+An MRZ detection failure means that the expected machine-readable zone could not be reliably located.
+
+An MRZ parsing failure means that an MRZ-like region was detected but its fields could not be reliably interpreted.
+
+A check digit failure indicates that the calculated value does not agree with the check digit encoded in the MRZ.
+
+MRZ results should be treated as one component of document verification and should be considered together with OCR, document integrity, and other available verification signals.
+
+An MRZ result alone should not be treated as proof that a document is genuine or fraudulent.
