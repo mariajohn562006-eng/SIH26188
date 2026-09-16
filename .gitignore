@@ -12,6 +12,17 @@ dist
 dist-ssr
 *.local
 
+# Python environment, caches, and generated test artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Uploaded identity documents and local test media
+backend/uploads/
+uploads/
+tmp-test-*.jpg
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

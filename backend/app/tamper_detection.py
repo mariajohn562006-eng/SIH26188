@@ -3,6 +3,8 @@ from typing import Any
 
 import cv2
 
+from app.ocr import load_document_image
+
 
 def analyze_tampering(image_path: str) -> dict[str, Any]:
     """
@@ -25,12 +27,7 @@ def analyze_tampering(image_path: str) -> dict[str, Any]:
             f"Document file not found: {image_path}"
         )
 
-    image = cv2.imread(str(path))
-
-    if image is None:
-        raise ValueError(
-            f"Could not read image: {image_path}"
-        )
+    image = load_document_image(str(path))
 
     height, width = image.shape[:2]
 

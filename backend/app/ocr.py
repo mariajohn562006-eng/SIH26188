@@ -1,64 +1,51 @@
-import os
-import shutil
 from pathlib import Path
 from typing import Any
 
 import cv2
 import pytesseract
+import fitz
 
 from app.mrz import detect_mrz, parse_passport_mrz
 
 
-# ============================================================
-# TESSERACT CONFIGURATION
-# ============================================================
-
-TESSERACT_CANDIDATES = [
-    shutil.which("tesseract"),
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-]
-
-TESSERACT_PATH = next(
-    (
-        Path(candidate)
-        for candidate in TESSERACT_CANDIDATES
-        if candidate and Path(candidate).exists()
-    ),
-    None,
+TESSERACT_PATH = Path(
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 )
 
-if TESSERACT_PATH is None:
+if not TESSERACT_PATH.exists():
     raise RuntimeError(
-        "Tesseract executable not found. Install Tesseract OCR and ensure "
-        "C:\\Program Files\\Tesseract-OCR\\tesseract.exe is available."
+        f"Tesseract executable not found at: {TESSERACT_PATH}"
     )
 
-os.environ["PATH"] = (
-    str(TESSERACT_PATH.parent) + os.pathsep + os.environ.get("PATH", "")
-).strip(os.pathsep)
-
-pytesseract.pytesseract.tesseract_cmd = str(TESSERACT_PATH)
+pytesseract.pytesseract.tesseract_cmd = str(
+    TESSERACT_PATH
+)
 
 
-# Verify that Python can actually execute Tesseract
 try:
     tesseract_version = pytesseract.get_tesseract_version()
-    print("DEBUG: Tesseract detected:", tesseract_version)
+    print(
+        "DEBUG: Tesseract detected:",
+        tesseract_version
+    )
 except Exception as error:
-    print("DEBUG: Tesseract test failed:", error)
+    print(
+        "DEBUG: Tesseract test failed:",
+        error
+    )
     raise RuntimeError(
         f"Tesseract is installed but Python could not execute it: {error}"
     )
 
 
-# ============================================================
-# IMAGE LOADING
-# ============================================================
-
-def load_document_image(image_path: str):
+def load_document_image(
+    image_path: str
+):
     """
-    Load the uploaded document image using OpenCV.
+    Load JPG/PNG directly.
+
+    If the document is a PDF, render the first
+    page into an OpenCV image.
     """
 
     path = Path(image_path)
@@ -68,7 +55,72 @@ def load_document_image(image_path: str):
             f"Document file not found: {image_path}"
         )
 
-    image = cv2.imread(str(path))
+    extension = path.suffix.lower()
+
+    # --------------------------------------------------
+    # PDF
+    # --------------------------------------------------
+
+    if extension == ".pdf":
+
+        try:
+            pdf = fitz.open(str(path))
+
+            if pdf.page_count == 0:
+                pdf.close()
+                raise ValueError(
+                    "PDF does not contain any pages."
+                )
+
+            page = pdf.load_page(0)
+
+            # Render PDF page at higher resolution
+            matrix = fitz.Matrix(2, 2)
+
+            pixmap = page.get_pixmap(
+                matrix=matrix,
+                alpha=False
+            )
+
+            image_bytes = pixmap.tobytes(
+                "png"
+            )
+
+            pdf.close()
+
+            # Convert PNG bytes to OpenCV image
+            import numpy as np
+
+            image_array = np.frombuffer(
+                image_bytes,
+                dtype=np.uint8
+            )
+
+            image = cv2.imdecode(
+                image_array,
+                cv2.IMREAD_COLOR
+            )
+
+            if image is None:
+                raise ValueError(
+                    "Could not convert PDF page to image."
+                )
+
+            return image
+
+        except Exception as error:
+            raise ValueError(
+                f"Could not read PDF document: {error}"
+            )
+
+
+    # --------------------------------------------------
+    # NORMAL IMAGE
+    # --------------------------------------------------
+
+    image = cv2.imread(
+        str(path)
+    )
 
     if image is None:
         raise ValueError(
@@ -79,24 +131,18 @@ def load_document_image(image_path: str):
     return image
 
 
-# ============================================================
-# IMAGE PREPROCESSING
-# ============================================================
+def preprocess_image(
+    image_path: str
+):
+    image = load_document_image(
+        image_path
+    )
 
-def preprocess_image(image_path: str):
-    """
-    Prepare the document image for OCR.
-    """
-
-    image = load_document_image(image_path)
-
-    # Convert to grayscale
     gray = cv2.cvtColor(
         image,
         cv2.COLOR_BGR2GRAY
     )
 
-    # Increase resolution
     gray = cv2.resize(
         gray,
         None,
@@ -105,14 +151,12 @@ def preprocess_image(image_path: str):
         interpolation=cv2.INTER_CUBIC
     )
 
-    # Reduce noise
     gray = cv2.GaussianBlur(
         gray,
         (3, 3),
         0
     )
 
-    # Automatic thresholding
     threshold = cv2.threshold(
         gray,
         0,
@@ -123,16 +167,13 @@ def preprocess_image(image_path: str):
     return threshold
 
 
-# ============================================================
-# OCR TEXT EXTRACTION
-# ============================================================
+def extract_text(
+    image_path: str
+) -> str:
 
-def extract_text(image_path: str) -> str:
-    """
-    Extract text from the document using Tesseract OCR.
-    """
-
-    image = preprocess_image(image_path)
+    image = preprocess_image(
+        image_path
+    )
 
     text = pytesseract.image_to_string(
         image,
@@ -142,30 +183,19 @@ def extract_text(image_path: str) -> str:
     return text.strip()
 
 
-# ============================================================
-# DOCUMENT ANALYSIS
-# ============================================================
+def analyze_document(
+    document_path: str
+) -> dict[str, Any]:
 
-def analyze_document(document_path: str) -> dict[str, Any]:
-    """
-    Complete document analysis.
-
-    Steps:
-        1. Validate document
-        2. Load image
-        3. Run OCR
-        4. Detect MRZ
-        5. Parse MRZ
-    """
-
-    path = Path(document_path)
+    path = Path(
+        document_path
+    )
 
     if not path.exists():
         raise FileNotFoundError(
             f"Document file not found: {document_path}"
         )
 
-    # Make sure OpenCV can read the image
     image = load_document_image(
         str(path)
     )
@@ -184,11 +214,9 @@ def analyze_document(document_path: str) -> dict[str, Any]:
         height
     )
 
-    # --------------------------------------------------------
-    # OCR
-    # --------------------------------------------------------
-
-    print("DEBUG: extracting OCR text")
+    print(
+        "DEBUG: extracting OCR text"
+    )
 
     text = extract_text(
         str(path)
@@ -199,13 +227,13 @@ def analyze_document(document_path: str) -> dict[str, Any]:
         len(text)
     )
 
-    # --------------------------------------------------------
-    # MRZ DETECTION
-    # --------------------------------------------------------
+    print(
+        "DEBUG: detecting MRZ"
+    )
 
-    print("DEBUG: detecting MRZ")
-
-    mrz = detect_mrz(text)
+    mrz = detect_mrz(
+        text
+    )
 
     parsed_mrz = {
         "success": False,
@@ -213,18 +241,20 @@ def analyze_document(document_path: str) -> dict[str, Any]:
     }
 
     if mrz["detected"]:
-        print("DEBUG: MRZ detected")
+
+        print(
+            "DEBUG: MRZ detected"
+        )
 
         parsed_mrz = parse_passport_mrz(
             mrz["lines"]
         )
 
     else:
-        print("DEBUG: MRZ not detected")
 
-    # --------------------------------------------------------
-    # RETURN RESULT
-    # --------------------------------------------------------
+        print(
+            "DEBUG: MRZ not detected"
+        )
 
     return {
         "document": {
